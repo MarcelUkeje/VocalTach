@@ -1,0 +1,1271 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VocalTach // Real-Time SPS & WPM Speech Speedometer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-cockpit: #080c14;
+      --panel-bg: rgba(15, 23, 42, 0.78);
+      --panel-border: rgba(51, 65, 85, 0.6);
+    }
+
+    body {
+      background-color: var(--bg-cockpit);
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+        radial-gradient(circle at 85% 90%, rgba(6, 182, 212, 0.06) 0%, transparent 40%),
+        linear-gradient(to bottom, #070a12 0%, #0b111e 100%);
+      font-family: 'Inter', sans-serif;
+      color: #f1f5f9;
+      overflow-x: hidden;
+    }
+
+    .font-mono-tech {
+      font-family: 'JetBrains Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* HUD Glass Card */
+    .hud-panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--panel-border);
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7), inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    /* Over-speed danger glow */
+    .hud-overspeed-alert {
+      border-color: rgba(239, 68, 68, 0.85) !important;
+      box-shadow: 0 0 35px rgba(239, 68, 68, 0.35), inset 0 0 20px rgba(239, 68, 68, 0.2) !important;
+    }
+
+    /* Custom Range Sliders */
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      background: #1e293b;
+      border-radius: 999px;
+      outline: none;
+      border: 1px solid rgba(71, 85, 105, 0.5);
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #38bdf8;
+      cursor: pointer;
+      border: 2px solid #0f172a;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
+      transition: transform 0.15s ease, background-color 0.15s ease;
+    }
+
+    input[type="range"]::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+      background: #7dd3fc;
+    }
+
+    /* Subtle grid overlay for oscilloscope */
+    .scope-grid {
+      background-size: 24px 24px;
+      background-image: 
+        linear-gradient(to right, rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.85); opacity: 0.9; }
+      100% { transform: scale(1.75); opacity: 0; }
+    }
+
+    .syllable-flash-active::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 9999px;
+      border: 2px solid #34d399;
+      animation: pulse-ring 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between p-3 sm:p-5 md:p-6 select-none">
+
+  <!-- TOP NAVIGATION / TELEMETRY BAR -->
+  <header class="max-w-7xl w-full mx-auto mb-4">
+    <div class="hud-panel rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+      <!-- Brand & System Status -->
+      <div class="flex items-center gap-3">
+        <div class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-slate-900 border border-slate-700 text-emerald-400 shadow-inner">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="font-bold tracking-tight text-base sm:text-lg text-white">VOCALTACH <span class="text-xs font-mono-tech uppercase px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">DSP v2.4</span></h1>
+          </div>
+          <p class="text-xs text-slate-400">Real-Time Acoustic Sonority Nucleus & Speech Rate Speedometer</p>
+        </div>
+      </div>
+
+      <!-- Live Nucleus Trigger Indicator & Primary Controls -->
+      <div class="flex flex-wrap items-center gap-2.5 sm:gap-3">
+        <!-- Syllable Pulse Indicator -->
+        <div class="flex items-center gap-2.5 bg-slate-900/90 border border-slate-800 px-3 py-2 rounded-xl">
+          <div id="syllablePulseDot" class="relative w-3.5 h-3.5 rounded-full bg-slate-700 transition-colors duration-75"></div>
+          <div class="text-left">
+            <div class="text-[10px] font-mono-tech uppercase tracking-wider text-slate-400 leading-none">Nucleus Trigger</div>
+            <div id="peakStatusText" class="text-xs font-mono-tech text-slate-300 font-semibold leading-tight mt-0.5">STANDBY</div>
+          </div>
+        </div>
+
+        <!-- Synthetic Simulator Mode Selector -->
+        <div class="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1">
+          <span class="text-[11px] font-mono-tech uppercase text-slate-400 px-2.5 hidden sm:inline">Test Gen:</span>
+          <button data-sim="off" class="sim-btn px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 text-white transition">Off</button>
+          <button data-sim="drill" class="sim-btn px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition" title="Simulate 80 BPM Drill (~3.1 SPS)">Ideal (3.3)</button>
+          <button data-sim="conv" class="sim-btn px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition" title="Simulate Conversational (~4.6 SPS)">Fast (4.6)</button>
+          <button data-sim="rush" class="sim-btn px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition" title="Simulate Cluttering/Rushing (~6.8 SPS)">Rush (6.8)</button>
+        </div>
+
+        <!-- Start / Stop Mic Button -->
+        <button id="micToggleBtn" class="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs sm:text-sm bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition active:scale-95 cursor-pointer">
+          <svg id="micIcon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+          </svg>
+          <span id="micBtnLabel">Enable Live Mic</span>
+        </button>
+
+        <!-- Reset Session -->
+        <button id="resetSessionBtn" class="p-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition active:scale-95" title="Reset Session Counters">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Error / Permission Banner (Hidden by default) -->
+  <div id="errorBanner" class="hidden max-w-7xl w-full mx-auto mb-4">
+    <div class="bg-red-950/80 border border-red-500/60 text-red-200 px-4 py-3 rounded-xl flex items-center justify-between text-xs sm:text-sm">
+      <div class="flex items-center gap-2.5">
+        <svg class="w-5 h-5 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+        <span id="errorBannerMsg">Microphone permission denied or unavailable. Use the "Test Gen" buttons above to preview the gauge physics.</span>
+      </div>
+      <button id="dismissErrorBtn" class="text-red-300 hover:text-white font-mono-tech text-xs underline ml-4">Dismiss</button>
+    </div>
+  </div>
+
+  <!-- MAIN COCKPIT GRID -->
+  <main class="max-w-7xl w-full mx-auto flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-stretch">
+    
+    <!-- LEFT/CENTER COLUMN: RADIAL SPEEDOMETER + TELEMETRY CARDS + OSCILLOSCOPE (8 COLS) -->
+    <div class="lg:col-span-8 flex flex-col gap-4 sm:gap-5">
+      
+      <!-- PRIMARY TACHOMETER HUD CARD -->
+      <section id="tachometerCard" class="hud-panel rounded-2xl p-4 sm:p-6 flex flex-col items-center justify-between relative overflow-hidden">
+        
+        <!-- Top Status Pill Row inside Tachometer -->
+        <div class="w-full flex flex-wrap items-center justify-between gap-2 z-10 mb-1">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono-tech uppercase tracking-wider text-slate-400">Active Zone:</span>
+            <span id="zoneBadge" class="px-2.5 py-0.5 rounded-full text-xs font-mono-tech font-semibold bg-slate-800 text-slate-300 border border-slate-700">
+              IDLE / READY
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono-tech text-slate-400">Target Window:</span>
+            <span id="targetRangeReadout" class="text-xs font-mono-tech font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-0.5 rounded-full">
+              3.0 – 4.2 SPS
+            </span>
+          </div>
+        </div>
+
+        <!-- SVG RADIAL TACHOMETER GAUGE -->
+        <div class="relative w-full max-w-[460px] aspect-[16/11] flex items-center justify-center my-1">
+          <svg id="speedometerSvg" viewBox="0 0 400 275" class="w-full h-full overflow-visible">
+            <defs>
+              <!-- Glow filters for needle and active zones -->
+              <filter id="needleGlow" x="-40%" y="-40%" width="180%" height="180%">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+              </filter>
+              <linearGradient id="hubGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#1e293b" />
+                <stop offset="100%" stop-color="#0f172a" />
+              </linearGradient>
+            </defs>
+
+            <!-- Outer Subtle Bezel Arc -->
+            <path id="bezelArc" fill="none" stroke="#1e293b" stroke-width="2" stroke-dasharray="3 3" />
+
+            <!-- Color-Coded Zone Arcs (0 to 9.0 SPS) -->
+            <!-- 1. Slow / Pause (< 2.8 SPS) -->
+            <path id="arcSlow" fill="none" stroke="#475569" stroke-width="18" stroke-linecap="butt" class=" opacity-75" />
+            <!-- 2. Deliberate / Authoritative (2.8 - 4.2 SPS) -->
+            <path id="arcDeliberate" fill="none" stroke="#10b981" stroke-width="18" stroke-linecap="butt" class="opacity-85" />
+            <!-- 3. Conversational (4.2 - 5.2 SPS) -->
+            <path id="arcConversational" fill="none" stroke="#06b6d4" stroke-width="18" stroke-linecap="butt" class="opacity-85" />
+            <!-- 4. Fast / Rush Warning (5.2 - 6.2 SPS) -->
+            <path id="arcFast" fill="none" stroke="#f59e0b" stroke-width="18" stroke-linecap="butt" class="opacity-85" />
+            <!-- 5. Slurring / Danger Zone (> 6.2 SPS) -->
+            <path id="arcDanger" fill="none" stroke="#ef4444" stroke-width="18" stroke-linecap="butt" class="opacity-90" />
+
+            <!-- Dynamic User Target Bracket Highlight Arc (Inner Rim) -->
+            <path id="arcTargetHighlight" fill="none" stroke="#34d399" stroke-width="5" stroke-linecap="round" filter="url(#needleGlow)" />
+
+            <!-- Tick Marks & Numeric Labels Group -->
+            <g id="gaugeTicksGroup"></g>
+
+            <!-- Ghost Peak-Hold Marker Needle -->
+            <g id="peakHoldGroup" transform="translate(200, 200) rotate(-125)">
+              <line x1="0" y1="-118" x2="0" y2="-142" stroke="#f43f5e" stroke-width="3" stroke-linecap="round" opacity="0.75" />
+            </g>
+
+            <!-- Main Tachometer Needle -->
+            <g id="needleGroup" transform="translate(200, 200) rotate(-125)">
+              <polygon points="-4,16 -1.5,-134 0,-142 1.5,-134 4,16" fill="#f8fafc" filter="url(#needleGlow)" />
+              <polygon points="-2.5,10 -1,-130 1,-130 2.5,10" fill="#38bdf8" />
+            </g>
+
+            <!-- Center Hub Cap -->
+            <circle cx="200" cy="200" r="26" fill="url(#hubGrad)" stroke="#334155" stroke-width="2.5" />
+            <circle id="hubCenterDot" cx="200" cy="200" r="8" fill="#10b981" />
+
+            <!-- Zone Legend Labels Along Arc -->
+            <text x="40" y="195" fill="#64748b" class="text-[9px] font-mono-tech uppercase tracking-wider">Slow</text>
+            <text x="85" y="52" fill="#10b981" class="text-[9px] font-mono-tech uppercase tracking-wider font-semibold">Deliberate</text>
+            <text x="236" y="36" fill="#06b6d4" class="text-[9px] font-mono-tech uppercase tracking-wider font-semibold">Conversational</text>
+            <text x="336" y="102" fill="#f59e0b" class="text-[9px] font-mono-tech uppercase tracking-wider font-semibold">Rush</text>
+            <text x="350" y="195" fill="#ef4444" class="text-[9px] font-mono-tech uppercase tracking-wider font-bold">Slur</text>
+          </svg>
+
+          <!-- Live Center-Bottom Digital Readout Overlay -->
+          <div class="absolute bottom-0 inset-x-0 flex flex-col items-center justify-end pointer-events-none">
+            <div class="flex items-baseline gap-2">
+              <span id="liveSpsReadout" class="font-mono-tech text-5xl sm:text-6xl font-extrabold tracking-tight text-white drop-shadow">0.0</span>
+              <div class="flex flex-col text-left">
+                <span class="text-xs font-mono-tech font-bold text-emerald-400 uppercase tracking-wider">SPS</span>
+                <span class="text-[10px] text-slate-400 leading-none">Syllables/Sec</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4-COLUMN DIGITAL TELEMETRY STRIP -->
+        <div class="w-full grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-4 pt-4 border-t border-slate-800/90">
+          <!-- Equivalent WPM -->
+          <div class="bg-slate-900/75 border border-slate-800/90 rounded-xl p-3 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-mono-tech uppercase text-slate-400">Est. Pace (WPM)</span>
+              <span class="text-[10px] font-mono-tech text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded">÷1.45</span>
+            </div>
+            <div class="mt-1 flex items-baseline gap-1.5">
+              <span id="liveWpmReadout" class="text-2xl sm:text-3xl font-mono-tech font-bold text-cyan-300">0</span>
+              <span class="text-xs text-slate-400 font-mono-tech">WPM</span>
+            </div>
+          </div>
+
+          <!-- Active Speaking Rate (Excludes Pauses) -->
+          <div class="bg-slate-900/75 border border-slate-800/90 rounded-xl p-3 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-mono-tech uppercase text-slate-400">Session Avg</span>
+              <span class="text-[10px] font-mono-tech text-emerald-400">Active</span>
+            </div>
+            <div class="mt-1 flex items-baseline gap-1.5">
+              <span id="avgActiveSpsReadout" class="text-2xl sm:text-3xl font-mono-tech font-bold text-emerald-300">0.0</span>
+              <span class="text-xs text-slate-400 font-mono-tech">SPS</span>
+            </div>
+          </div>
+
+          <!-- Instantaneous Burst Rate -->
+          <div class="bg-slate-900/75 border border-slate-800/90 rounded-xl p-3 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-mono-tech uppercase text-slate-400">Instant Burst</span>
+              <span id="pauseHoldBadge" class="text-[10px] font-mono-tech text-slate-500">LIVE</span>
+            </div>
+            <div class="mt-1 flex items-baseline gap-1.5">
+              <span id="instantSpsReadout" class="text-2xl sm:text-3xl font-mono-tech font-bold text-amber-300">0.0</span>
+              <span class="text-xs text-slate-400 font-mono-tech">SPS</span>
+            </div>
+          </div>
+
+          <!-- Total Syllables Counted -->
+          <div class="bg-slate-900/75 border border-slate-800/90 rounded-xl p-3 flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-mono-tech uppercase text-slate-400">Syllable Count</span>
+              <span id="peakHoldSpsBadge" class="text-[10px] font-mono-tech text-rose-400">PK: 0.0</span>
+            </div>
+            <div class="mt-1 flex items-baseline gap-1.5">
+              <span id="totalSyllablesReadout" class="text-2xl sm:text-3xl font-mono-tech font-bold text-white">0</span>
+              <span class="text-xs text-slate-400 font-mono-tech">nucl.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- REAL-TIME SONORITY ENVELOPE & PEAK MARKER OSCILLOSCOPE -->
+      <section class="hud-panel rounded-2xl p-4 flex flex-col gap-2.5 flex-1 min-h-[195px]">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+            <h2 class="text-xs font-mono-tech uppercase tracking-wider text-slate-300 font-semibold">
+              Vocal Sonority Envelope (300Hz–3.2kHz Bandpass) & Syllable Peak Detector
+            </h2>
+          </div>
+          <div class="flex items-center gap-4 text-[11px] font-mono-tech">
+            <span class="flex items-center gap-1.5 text-cyan-400">
+              <span class="w-2.5 h-0.5 bg-cyan-400 inline-block"></span> RMS Envelope
+            </span>
+            <span class="flex items-center gap-1.5 text-amber-400">
+              <span class="w-2.5 h-0.5 border-b border-dashed border-amber-400 inline-block"></span> Trigger Threshold
+            </span>
+            <span class="flex items-center gap-1.5 text-emerald-400">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span> Syllable Peak
+            </span>
+          </div>
+        </div>
+
+        <div class="relative flex-1 w-full bg-slate-950/90 rounded-xl border border-slate-800/90 overflow-hidden scope-grid min-h-[130px]">
+          <canvas id="envelopeCanvas" class="w-full h-full block"></canvas>
+          <!-- Live Signal dB / RMS Overlay -->
+          <div class="absolute top-2 left-2.5 pointer-events-none flex items-center gap-3 text-[11px] font-mono-tech text-slate-400">
+            <span>RMS: <strong id="rmsValueText" class="text-slate-200">0.000</strong></span>
+            <span>NOISE FLOOR: <strong id="noiseFloorText" class="text-slate-200">0.004</strong></span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- RIGHT COLUMN: CALIBRATION & DSP CONTROL PANEL (4 COLS) -->
+    <aside class="lg:col-span-4 flex flex-col gap-4 sm:gap-5">
+      
+      <div class="hud-panel rounded-2xl p-4 sm:p-5 flex flex-col justify-between h-full gap-5">
+        
+        <!-- Section 1: Target Pacing Presets -->
+        <div>
+          <div class="flex items-center justify-between mb-2.5">
+            <h2 class="text-xs font-mono-tech uppercase tracking-wider text-slate-300 font-semibold">1. Target Pace Profile</h2>
+            <span class="text-[11px] font-mono-tech text-emerald-400">Green Arc Zone</span>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2">
+            <button data-preset="public" class="preset-btn text-left p-2.5 rounded-xl border transition flex items-center justify-between bg-emerald-950/40 border-emerald-500/60 text-white">
+              <div>
+                <div class="text-xs font-semibold">Authoritative Public Speaking</div>
+                <div class="text-[11px] text-slate-400">Deliberate clarity, high gravitas (~125–175 WPM)</div>
+              </div>
+              <span class="font-mono-tech text-xs font-bold text-emerald-400 shrink-0 ml-2">3.0–4.2 SPS</span>
+            </button>
+
+            <button data-preset="drill80" class="preset-btn text-left p-2.5 rounded-xl border transition flex items-center justify-between bg-slate-900/70 border-slate-800 text-slate-300 hover:border-slate-700">
+              <div>
+                <div class="text-xs font-semibold">80 BPM Metronome Articulation Drill</div>
+                <div class="text-[11px] text-slate-400">Crisp consonant precision & pacing control</div>
+              </div>
+              <span class="font-mono-tech text-xs font-bold text-cyan-400 shrink-0 ml-2">2.6–3.6 SPS</span>
+            </button>
+
+            <button data-preset="conv" class="preset-btn text-left p-2.5 rounded-xl border transition flex items-center justify-between bg-slate-900/70 border-slate-800 text-slate-300 hover:border-slate-700">
+              <div>
+                <div class="text-xs font-semibold">Natural Conversational</div>
+                <div class="text-[11px] text-slate-400">Energetic everyday dialogue (~165–205 WPM)</div>
+              </div>
+              <span class="font-mono-tech text-xs font-bold text-teal-400 shrink-0 ml-2">4.0–5.0 SPS</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Section 2: Acoustic DSP Calibration Sliders -->
+        <div class="space-y-4 pt-3 border-t border-slate-800/80">
+          <div class="flex items-center justify-between">
+            <h2 class="text-xs font-mono-tech uppercase tracking-wider text-slate-300 font-semibold">2. Acoustic Peak Calibration</h2>
+            <button id="resetDspBtn" class="text-[11px] font-mono-tech text-sky-400 hover:underline">Defaults</button>
+          </div>
+
+          <!-- Sensitivity / Threshold Slider -->
+          <div class="bg-slate-900/70 border border-slate-800/90 rounded-xl p-3 space-y-1.5">
+            <div class="flex justify-between text-xs">
+              <label for="thresholdSlider" class="font-medium text-slate-200">Vowel Nucleus Threshold</label>
+              <span id="thresholdVal" class="font-mono-tech text-amber-400 font-semibold">0.032</span>
+            </div>
+            <input id="thresholdSlider" type="range" min="0.008" max="0.140" step="0.002" value="0.032" />
+            <p class="text-[11px] text-slate-400 leading-relaxed">
+              Adjust until the amber line sits cleanly above room noise and triggers one green dot per spoken syllable.
+            </p>
+          </div>
+
+          <!-- Refractory Cooldown Slider -->
+          <div class="bg-slate-900/70 border border-slate-800/90 rounded-xl p-3 space-y-1.5">
+            <div class="flex justify-between text-xs">
+              <label for="refractorySlider" class="font-medium text-slate-200">Refractory Gate Cooldown</label>
+              <span id="refractoryVal" class="font-mono-tech text-sky-400 font-semibold">95 ms</span>
+            </div>
+            <input id="refractorySlider" type="range" min="60" max="160" step="5" value="95" />
+            <p class="text-[11px] text-slate-400 leading-relaxed">
+              Prevents drawn-out vowels or diphthongs from double-counting. 90–105ms is ideal for normal speech.
+            </p>
+          </div>
+
+          <!-- Rolling Window Damping Slider -->
+          <div class="bg-slate-900/70 border border-slate-800/90 rounded-xl p-3 space-y-1.5">
+            <div class="flex justify-between text-xs">
+              <label for="windowSlider" class="font-medium text-slate-200">Speedometer Rolling Window</label>
+              <span id="windowVal" class="font-mono-tech text-emerald-400 font-semibold">2.4 s</span>
+            </div>
+            <input id="windowSlider" type="range" min="1.5" max="4.5" step="0.1" value="2.4" />
+            <p class="text-[11px] text-slate-400 leading-relaxed">
+              Shorter windows (1.5s) make the needle hyper-reactive to bursts; longer windows (3.5s) show macro phrasing pace.
+            </p>
+          </div>
+        </div>
+
+        <!-- Section 3: Real-Time Alerts & Pause Freeze -->
+        <div class="space-y-2.5 pt-3 border-t border-slate-800/80">
+          <h2 class="text-xs font-mono-tech uppercase tracking-wider text-slate-300 font-semibold mb-1">3. Feedback & Telemetry Behavior</h2>
+
+          <!-- Visual Over-speed Alert Toggle -->
+          <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/70 border border-slate-800/90 cursor-pointer hover:border-slate-700 transition">
+            <div>
+              <div class="text-xs font-medium text-slate-200">Visual Over-Speed HUD Alert</div>
+              <div class="text-[11px] text-slate-400">Glow cockpit red when exceeding target ceiling</div>
+            </div>
+            <input id="visualAlertToggle" type="checkbox" checked class="w-4 h-4 accent-emerald-500 rounded cursor-pointer" />
+          </label>
+
+          <!-- Audio Geigercounter / Over-speed Chime Toggle -->
+          <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/70 border border-slate-800/90 cursor-pointer hover:border-slate-700 transition">
+            <div>
+              <div class="text-xs font-medium text-slate-200">Subtle Over-Speed Audio Beep</div>
+              <div class="text-[11px] text-slate-400">Soft warning tone if pace stays > 5.5 SPS</div>
+            </div>
+            <input id="audioAlertToggle" type="checkbox" class="w-4 h-4 accent-emerald-500 rounded cursor-pointer" />
+          </label>
+
+          <!-- Breath-Pause Hold Toggle -->
+          <label class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900/70 border border-slate-800/90 cursor-pointer hover:border-slate-700 transition">
+            <div>
+              <div class="text-xs font-medium text-slate-200">Breath-Pause Needle Stabilizer</div>
+              <div class="text-[11px] text-slate-400">Holds pace momentum across brief <550ms breaths</div>
+            </div>
+            <input id="breathHoldToggle" type="checkbox" checked class="w-4 h-4 accent-emerald-500 rounded cursor-pointer" />
+          </label>
+        </div>
+
+      </div>
+    </aside>
+
+  </main>
+
+  <!-- FOOTER QUICK CALIBRATION GUIDE -->
+  <footer class="max-w-7xl w-full mx-auto mt-4">
+    <div class="hud-panel rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+      <div class="flex items-center gap-2">
+        <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono-tech text-[10px] uppercase">How It Works</span>
+        <span>Every syllable has a vowel core (sonority nucleus). The 300–3200Hz bandpass filter strips consonant hiss (`s`, `t`, `k`) to track pure syllable rate with <40ms latency.</span>
+      </div>
+      <div class="font-mono-tech text-[11px] text-slate-400">
+        1.45 Syllables/Word Standard Ratio
+      </div>
+    </div>
+  </footer>
+
+  <!-- APPLICATION SCRIPT (DSP + UI + PHYSICS) -->
+  <script>
+    (function () {
+      'use strict';
+
+      // --- CONFIGURATION & DSP STATE ---
+      const CONFIG = {
+        maxGaugeSps: 9.0,
+        startAngleDeg: -125,
+        endAngleDeg: 125,
+        syllablesPerWord: 1.45,
+        threshold: 0.032,        // RMS energy trigger threshold
+        refractoryMs: 95,        // Minimum ms between syllable peaks
+        rollingWindowSec: 2.4,   // Rolling time window for SPS calculation
+        targetMinSps: 3.0,       // Active target green bracket min
+        targetMaxSps: 4.2,       // Active target green bracket max
+        visualAlert: true,
+        audioAlert: false,
+        breathStabilizer: true
+      };
+
+      const STATE = {
+        isMicActive: false,
+        simMode: 'off',          // 'off' | 'drill' | 'conv' | 'rush'
+        audioCtx: null,
+        micStream: null,
+        analyser: null,
+        timeDomainBuffer: null,
+
+        // Envelope & Peak Detection
+        smoothedRms: 0,
+        prevSmoothedRms: 0,
+        noiseFloor: 0.003,
+        isAboveThreshold: false,
+        currentPeakMax: 0,
+        lastSyllableTimeMs: 0,
+        lastAudioBeepTimeMs: 0,
+
+        // Syllable Timestamp Log & Session Stats
+        syllableTimestamps: [],  // Array of performance.now() timestamps (ms)
+        totalSyllables: 0,
+        activeSpeakingMs: 0,
+        activeSpeakingSyllables: 0,
+        lastFrameTimeMs: performance.now(),
+
+        // Gauge Physics
+        displayedSps: 0,
+        instantBurstSps: 0,
+        peakHoldSps: 0,
+        peakHoldDecayTimeMs: 0,
+
+        // Scrolling Oscilloscope History
+        scopeHistory: [],        // { rms, threshold, isPeak }
+        maxScopePoints: 260,
+
+        // Synthetic Simulator Next Trigger
+        nextSimSyllableMs: 0,
+        simPulseEnvelope: 0
+      };
+
+      // --- DOM ELEMENTS ---
+      const els = {
+        micToggleBtn: document.getElementById('micToggleBtn'),
+        micBtnLabel: document.getElementById('micBtnLabel'),
+        resetSessionBtn: document.getElementById('resetSessionBtn'),
+        errorBanner: document.getElementById('errorBanner'),
+        errorBannerMsg: document.getElementById('errorBannerMsg'),
+        dismissErrorBtn: document.getElementById('dismissErrorBtn'),
+
+        syllablePulseDot: document.getElementById('syllablePulseDot'),
+        peakStatusText: document.getElementById('peakStatusText'),
+        tachometerCard: document.getElementById('tachometerCard'),
+        zoneBadge: document.getElementById('zoneBadge'),
+        targetRangeReadout: document.getElementById('targetRangeReadout'),
+
+        bezelArc: document.getElementById('bezelArc'),
+        arcSlow: document.getElementById('arcSlow'),
+        arcDeliberate: document.getElementById('arcDeliberate'),
+        arcConversational: document.getElementById('arcConversational'),
+        arcFast: document.getElementById('arcFast'),
+        arcDanger: document.getElementById('arcDanger'),
+        arcTargetHighlight: document.getElementById('arcTargetHighlight'),
+        gaugeTicksGroup: document.getElementById('gaugeTicksGroup'),
+        needleGroup: document.getElementById('needleGroup'),
+        peakHoldGroup: document.getElementById('peakHoldGroup'),
+        hubCenterDot: document.getElementById('hubCenterDot'),
+
+        liveSpsReadout: document.getElementById('liveSpsReadout'),
+        liveWpmReadout: document.getElementById('liveWpmReadout'),
+        avgActiveSpsReadout: document.getElementById('avgActiveSpsReadout'),
+        instantSpsReadout: document.getElementById('instantSpsReadout'),
+        pauseHoldBadge: document.getElementById('pauseHoldBadge'),
+        totalSyllablesReadout: document.getElementById('totalSyllablesReadout'),
+        peakHoldSpsBadge: document.getElementById('peakHoldSpsBadge'),
+
+        envelopeCanvas: document.getElementById('envelopeCanvas'),
+        rmsValueText: document.getElementById('rmsValueText'),
+        noiseFloorText: document.getElementById('noiseFloorText'),
+
+        thresholdSlider: document.getElementById('thresholdSlider'),
+        thresholdVal: document.getElementById('thresholdVal'),
+        refractorySlider: document.getElementById('refractorySlider'),
+        refractoryVal: document.getElementById('refractoryVal'),
+        windowSlider: document.getElementById('windowSlider'),
+        windowVal: document.getElementById('windowVal'),
+        resetDspBtn: document.getElementById('resetDspBtn'),
+
+        visualAlertToggle: document.getElementById('visualAlertToggle'),
+        audioAlertToggle: document.getElementById('audioAlertToggle'),
+        breathHoldToggle: document.getElementById('breathHoldToggle'),
+
+        simBtns: document.querySelectorAll('.sim-btn'),
+        presetBtns: document.querySelectorAll('.preset-btn')
+      };
+
+      const canvasCtx = els.envelopeCanvas.getContext('2d');
+
+      // --- SVG RADIAL GEOMETRY HELPERS ---
+      function polarToCartesian(cx, cy, radius, angleInDegrees) {
+        const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+        return {
+          x: cx + radius * Math.cos(angleInRadians),
+          y: cy + radius * Math.sin(angleInRadians)
+        };
+      }
+
+      function describeArc(cx, cy, radius, startAngle, endAngle) {
+        const start = polarToCartesian(cx, cy, radius, endAngle);
+        const end = polarToCartesian(cx, cy, radius, startAngle);
+        const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+        return [
+          'M', start.x.toFixed(2), start.y.toFixed(2),
+          'A', radius, radius, 0, largeArcFlag, 0, end.x.toFixed(2), end.y.toFixed(2)
+        ].join(' ');
+      }
+
+      function spsToAngle(sps) {
+        const clamped = Math.max(0, Math.min(CONFIG.maxGaugeSps, sps));
+        const ratio = clamped / CONFIG.maxGaugeSps;
+        return CONFIG.startAngleDeg + ratio * (CONFIG.endAngleDeg - CONFIG.startAngleDeg);
+      }
+
+      // Initialize static and dynamic SVG Gauge Arcs & Ticks
+      function buildSpeedometerGeometry() {
+        const cx = 200;
+        const cy = 200;
+        const mainRadius = 152;
+
+        // Outer decorative bezel
+        els.bezelArc.setAttribute('d', describeArc(cx, cy, 170, CONFIG.startAngleDeg, CONFIG.endAngleDeg));
+
+        // 5 Color-Coded Zone Arcs (with 0.6 deg gap for crisp visual separation)
+        els.arcSlow.setAttribute('d', describeArc(cx, cy, mainRadius, spsToAngle(0), spsToAngle(2.75)));
+        els.arcDeliberate.setAttribute('d', describeArc(cx, cy, mainRadius, spsToAngle(2.82), spsToAngle(4.18)));
+        els.arcConversational.setAttribute('d', describeArc(cx, cy, mainRadius, spsToAngle(4.25), spsToAngle(5.18)));
+        els.arcFast.setAttribute('d', describeArc(cx, cy, mainRadius, spsToAngle(5.25), spsToAngle(6.18)));
+        els.arcDanger.setAttribute('d', describeArc(cx, cy, mainRadius, spsToAngle(6.25), spsToAngle(9.0)));
+
+        updateTargetHighlightArc();
+
+        // Generate Ticks (Every 0.5 SPS, major every 1.0 SPS)
+        els.gaugeTicksGroup.innerHTML = '';
+        for (let sps = 0; sps <= 9.0; sps += 0.5) {
+          const angle = spsToAngle(sps);
+          const isMajor = Number.isInteger(sps);
+          const innerR = isMajor ? 124 : 131;
+          const outerR = 139;
+
+          const p1 = polarToCartesian(cx, cy, innerR, angle);
+          const p2 = polarToCartesian(cx, cy, outerR, angle);
+
+          const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          tick.setAttribute('x1', p1.x.toFixed(2));
+          tick.setAttribute('y1', p1.y.toFixed(2));
+          tick.setAttribute('x2', p2.x.toFixed(2));
+          tick.setAttribute('y2', p2.y.toFixed(2));
+          tick.setAttribute('stroke', isMajor ? '#cbd5e1' : '#475569');
+          tick.setAttribute('stroke-width', isMajor ? '2' : '1.2');
+          els.gaugeTicksGroup.appendChild(tick);
+
+          if (isMajor) {
+            const labelPos = polarToCartesian(cx, cy, 108, angle);
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', labelPos.x.toFixed(2));
+            text.setAttribute('y', (labelPos.y + 4).toFixed(2));
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('fill', sps >= 6 ? '#f87171' : '#94a3b8');
+            text.setAttribute('class', 'text-[12px] font-mono-tech font-bold');
+            text.textContent = sps.toString();
+            els.gaugeTicksGroup.appendChild(text);
+          }
+        }
+      }
+
+      function updateTargetHighlightArc() {
+        const cx = 200;
+        const cy = 200;
+        const targetRadius = 139;
+        els.arcTargetHighlight.setAttribute(
+          'd',
+          describeArc(cx, cy, targetRadius, spsToAngle(CONFIG.targetMinSps), spsToAngle(CONFIG.targetMaxSps))
+        );
+        els.targetRangeReadout.textContent = `${CONFIG.targetMinSps.toFixed(1)} – ${CONFIG.targetMaxSps.toFixed(1)} SPS`;
+      }
+
+      // --- WEB AUDIO API PIPELINE ---
+      async function toggleMicrophone() {
+        if (STATE.isMicActive) {
+          stopMicrophone();
+          return;
+        }
+
+        try {
+          els.errorBanner.classList.add('hidden');
+          // Turn off synthetic generator if active
+          setSimMode('off');
+
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: false
+            }
+          });
+
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          const audioCtx = new AudioContextClass();
+
+          const source = audioCtx.createMediaStreamSource(stream);
+
+          // 1. High-pass filter at 260 Hz to strip plosive pops, desk thumps, and room rumble
+          const highpass = audioCtx.createBiquadFilter();
+          highpass.type = 'highpass';
+          highpass.frequency.value = 260;
+          highpass.Q.value = 0.707;
+
+          // 2. Low-pass filter at 3200 Hz to strip sibilance ('s', 'sh', 'f') and isolate vowel formant energy
+          const lowpass = audioCtx.createBiquadFilter();
+          lowpass.type = 'lowpass';
+          lowpass.frequency.value = 3200;
+          lowpass.Q.value = 0.707;
+
+          // 3. AnalyserNode for rapid time-domain RMS calculation
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 1024;
+          analyser.smoothingTimeConstant = 0.2;
+
+          source.connect(highpass);
+          highpass.connect(lowpass);
+          lowpass.connect(analyser);
+
+          STATE.audioCtx = audioCtx;
+          STATE.micStream = stream;
+          STATE.analyser = analyser;
+          STATE.timeDomainBuffer = new Float32Array(analyser.fftSize);
+          STATE.isMicActive = true;
+
+          // Update Button UI
+          els.micToggleBtn.classList.remove('bg-emerald-500', 'hover:bg-emerald-400', 'text-slate-950');
+          els.micToggleBtn.classList.add('bg-rose-500', 'hover:bg-rose-400', 'text-white');
+          els.micBtnLabel.textContent = 'Stop Live Mic';
+          els.peakStatusText.textContent = 'LISTENING';
+          els.peakStatusText.className = 'text-xs font-mono-tech text-emerald-400 font-semibold leading-tight mt-0.5';
+
+        } catch (err) {
+          console.error('Microphone initialization failed:', err);
+          els.errorBannerMsg.textContent = `Mic access error (${err.name || 'Permission Denied'}). You can still test the speedometer using the "Test Gen" buttons in the top bar.`;
+          els.errorBanner.classList.remove('hidden');
+        }
+      }
+
+      function stopMicrophone() {
+        if (STATE.micStream) {
+          STATE.micStream.getTracks().forEach(track => track.stop());
+          STATE.micStream = null;
+        }
+        if (STATE.audioCtx) {
+          STATE.audioCtx.close().catch(() => {});
+          STATE.audioCtx = null;
+        }
+        STATE.analyser = null;
+        STATE.isMicActive = false;
+
+        els.micToggleBtn.classList.add('bg-emerald-500', 'hover:bg-emerald-400', 'text-slate-950');
+        els.micToggleBtn.classList.remove('bg-rose-500', 'hover:bg-rose-400', 'text-white');
+        els.micBtnLabel.textContent = 'Enable Live Mic';
+        els.peakStatusText.textContent = 'STANDBY';
+        els.peakStatusText.className = 'text-xs font-mono-tech text-slate-300 font-semibold leading-tight mt-0.5';
+      }
+
+      // Subtle Web Audio synthesized warning beep when exceeding target ceiling
+      function playOverspeedBeep(nowMs) {
+        if (!CONFIG.audioAlert) return;
+        if (nowMs - STATE.lastAudioBeepTimeMs < 950) return;
+        STATE.lastAudioBeepTimeMs = nowMs;
+
+        try {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          const ctx = STATE.audioCtx || new AudioContextClass();
+          if (ctx.state === 'suspended') ctx.resume();
+
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.09);
+
+          gain.gain.setValueAtTime(0.06, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.09);
+
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.095);
+        } catch (e) {
+          // Ignore audio synthesis errors if browser blocks autoplay
+        }
+      }
+
+      // --- SONORITY NUCLEUS (SYLLABLE PEAK) DETECTION ---
+      function triggerSyllableNucleus(nowMs) {
+        STATE.syllableTimestamps.push(nowMs);
+        STATE.totalSyllables += 1;
+
+        // Calculate instantaneous burst rate from last 3 syllable intervals
+        if (STATE.syllableTimestamps.length >= 2) {
+          const recentCount = Math.min(4, STATE.syllableTimestamps.length);
+          const spanMs = nowMs - STATE.syllableTimestamps[STATE.syllableTimestamps.length - recentCount];
+          if (spanMs > 0) {
+            const rawBurst = ((recentCount - 1) * 1000) / spanMs;
+            STATE.instantBurstSps = STATE.instantBurstSps * 0.45 + rawBurst * 0.55;
+          }
+        }
+
+        // Visual Pulse Indicator on Top Bar
+        els.syllablePulseDot.className = 'relative w-3.5 h-3.5 rounded-full bg-emerald-400 syllable-flash-active';
+        els.peakStatusText.textContent = 'SYLLABLE';
+        els.peakStatusText.className = 'text-xs font-mono-tech text-emerald-300 font-bold leading-tight mt-0.5';
+
+        setTimeout(() => {
+          els.syllablePulseDot.className = 'relative w-3.5 h-3.5 rounded-full bg-slate-700 transition-colors duration-150';
+          if (STATE.isMicActive || STATE.simMode !== 'off') {
+            els.peakStatusText.textContent = STATE.simMode !== 'off' ? 'SIMULATING' : 'LISTENING';
+            els.peakStatusText.className = 'text-xs font-mono-tech text-slate-300 font-semibold leading-tight mt-0.5';
+          }
+        }, 110);
+      }
+
+      // Process real-time audio frame or synthetic test signal
+      function processAudioAndDetectPeaks(nowMs) {
+        let rawRms = 0;
+
+        if (STATE.isMicActive && STATE.analyser && STATE.timeDomainBuffer) {
+          STATE.analyser.getFloatTimeDomainData(STATE.timeDomainBuffer);
+          let sumSquares = 0;
+          const len = STATE.timeDomainBuffer.length;
+          for (let i = 0; i < len; i++) {
+            const sample = STATE.timeDomainBuffer[i];
+            sumSquares += sample * sample;
+          }
+          rawRms = Math.sqrt(sumSquares / len);
+        } else if (STATE.simMode !== 'off') {
+          // Synthetic Speech Syllable Generator for testing gauge physics
+          if (nowMs >= STATE.nextSimSyllableMs) {
+            STATE.simPulseEnvelope = 0.085 + Math.random() * 0.035;
+            let targetSps = 3.3;
+            if (STATE.simMode === 'conv') targetSps = 4.6;
+            if (STATE.simMode === 'rush') targetSps = 6.8;
+
+            // Add realistic human cadence jitter + occasional brief clause pause
+            const isClauseBreath = Math.random() < 0.09;
+            const baseIntervalMs = 1000 / targetSps;
+            const jitterMs = (Math.random() - 0.5) * 45;
+            STATE.nextSimSyllableMs = nowMs + baseIntervalMs + jitterMs + (isClauseBreath ? 290 : 0);
+          }
+          STATE.simPulseEnvelope *= 0.82;
+          rawRms = STATE.simPulseEnvelope + 0.003 * Math.random();
+        }
+
+        // Smooth RMS envelope (fast attack, moderate release)
+        const attackCoeff = 0.45;
+        const releaseCoeff = 0.22;
+        STATE.prevSmoothedRms = STATE.smoothedRms;
+        if (rawRms > STATE.smoothedRms) {
+          STATE.smoothedRms = STATE.smoothedRms * (1 - attackCoeff) + rawRms * attackCoeff;
+        } else {
+          STATE.smoothedRms = STATE.smoothedRms * (1 - releaseCoeff) + rawRms * releaseCoeff;
+        }
+
+        // Dynamic noise floor estimation during quiet frames
+        if (STATE.smoothedRms < CONFIG.threshold * 0.7) {
+          STATE.noiseFloor = STATE.noiseFloor * 0.98 + STATE.smoothedRms * 0.02;
+        }
+
+        // Peak detection state machine with refractory cooldown
+        let detectedPeakThisFrame = false;
+        const effectiveThreshold = CONFIG.threshold;
+        const timeSinceLastPeak = nowMs - STATE.lastSyllableTimeMs;
+
+        if (STATE.smoothedRms >= effectiveThreshold) {
+          if (!STATE.isAboveThreshold) {
+            // Rising edge crossed above vowel nucleus threshold
+            STATE.isAboveThreshold = true;
+            STATE.currentPeakMax = STATE.smoothedRms;
+
+            if (timeSinceLastPeak >= CONFIG.refractoryMs) {
+              STATE.lastSyllableTimeMs = nowMs;
+              detectedPeakThisFrame = true;
+              triggerSyllableNucleus(nowMs);
+            }
+          } else {
+            // Already above threshold: check for prominent secondary syllable nucleus
+            // (e.g. rapid consecutive vowels where energy dips slightly without dropping fully below threshold)
+            if (STATE.smoothedRms > STATE.currentPeakMax) {
+              STATE.currentPeakMax = STATE.smoothedRms;
+            }
+          }
+        } else if (STATE.smoothedRms < effectiveThreshold * 0.78) {
+          // Hysteresis release below 78% of threshold resets trigger gate
+          STATE.isAboveThreshold = false;
+          STATE.currentPeakMax = 0;
+        }
+
+        // Push to oscilloscope history
+        STATE.scopeHistory.push({
+          rms: STATE.smoothedRms,
+          threshold: effectiveThreshold,
+          isPeak: detectedPeakThisFrame
+        });
+        if (STATE.scopeHistory.length > STATE.maxScopePoints) {
+          STATE.scopeHistory.shift();
+        }
+      }
+
+      // --- ROLLING WINDOW SPEEDOMETER PHYSICS ---
+      function updateSpeedometerPhysics(nowMs, dtMs) {
+        const windowMs = CONFIG.rollingWindowSec * 1000;
+        const cutoffMs = nowMs - windowMs;
+
+        // Prune syllables older than rolling window
+        while (STATE.syllableTimestamps.length > 0 && STATE.syllableTimestamps[0] < cutoffMs) {
+          STATE.syllableTimestamps.shift();
+        }
+
+        // Compute weighted rolling SPS (recent half of window weighted 1.25x, older half 0.75x for snappy response)
+        const halfWindowCutoff = nowMs - windowMs * 0.5;
+        let weightedCount = 0;
+        for (let i = 0; i < STATE.syllableTimestamps.length; i++) {
+          weightedCount += STATE.syllableTimestamps[i] >= halfWindowCutoff ? 1.25 : 0.75;
+        }
+        const rawWindowSps = weightedCount / CONFIG.rollingWindowSec;
+
+        // Breath-pause stabilizer: if the user spoke within the last 550ms, slow down needle decay
+        // so normal mid-sentence punctuation pauses don't cause wild needle drops
+        const msSinceLastSyllable = nowMs - STATE.lastSyllableTimeMs;
+        const inBriefBreathPause =
+          CONFIG.breathStabilizer &&
+          STATE.totalSyllables > 0 &&
+          msSinceLastSyllable > 180 &&
+          msSinceLastSyllable < 580;
+
+        els.pauseHoldBadge.textContent = inBriefBreathPause ? 'BREATH HOLD' : 'LIVE';
+        els.pauseHoldBadge.className = inBriefBreathPause
+          ? 'text-[10px] font-mono-tech text-cyan-400 font-semibold'
+          : 'text-[10px] font-mono-tech text-slate-500';
+
+        // Asymmetric damping: rapid rise on speech bursts, smooth coast down during pauses
+        let smoothingAlpha = rawWindowSps > STATE.displayedSps ? 0.18 : 0.075;
+        if (inBriefBreathPause && rawWindowSps < STATE.displayedSps) {
+          smoothingAlpha = 0.018; // Coast gently across short breath
+        }
+
+        STATE.displayedSps += (rawWindowSps - STATE.displayedSps) * smoothingAlpha;
+        if (STATE.displayedSps < 0.05) STATE.displayedSps = 0;
+
+        // Decay instantaneous burst readout if silent > 1.2s
+        if (msSinceLastSyllable > 1200) {
+          STATE.instantBurstSps *= 0.94;
+          if (STATE.instantBurstSps < 0.1) STATE.instantBurstSps = 0;
+        }
+
+        // Update Peak Hold Marker (holds peak for 2.5s then slowly decays)
+        if (STATE.displayedSps > STATE.peakHoldSps) {
+          STATE.peakHoldSps = STATE.displayedSps;
+          STATE.peakHoldDecayTimeMs = nowMs + 2500;
+        } else if (nowMs > STATE.peakHoldDecayTimeMs) {
+          STATE.peakHoldSps = Math.max(STATE.displayedSps, STATE.peakHoldSps - 0.015);
+        }
+
+        // Track Active Speaking Time (excludes pauses > 1100ms) for accurate Session Average
+        if (msSinceLastSyllable < 1100 && STATE.syllableTimestamps.length > 0) {
+          STATE.activeSpeakingMs += dtMs;
+        }
+      }
+
+      // --- RENDER HUD & OSCILLOSCOPE ---
+      function renderHud(nowMs) {
+        const sps = STATE.displayedSps;
+        const wpm = Math.round((sps * 60) / CONFIG.syllablesPerWord);
+
+        // Rotate SVG Needles
+        const mainAngle = spsToAngle(sps);
+        const peakAngle = spsToAngle(STATE.peakHoldSps);
+        els.needleGroup.setAttribute('transform', `translate(200, 200) rotate(${mainAngle.toFixed(2)})`);
+        els.peakHoldGroup.setAttribute('transform', `translate(200, 200) rotate(${peakAngle.toFixed(2)})`);
+
+        // Numeric Readouts
+        els.liveSpsReadout.textContent = sps.toFixed(1);
+        els.liveWpmReadout.textContent = wpm.toString();
+        els.instantSpsReadout.textContent = STATE.instantBurstSps.toFixed(1);
+        els.totalSyllablesReadout.textContent = STATE.totalSyllables.toString();
+        els.peakHoldSpsBadge.textContent = `PK: ${STATE.peakHoldSps.toFixed(1)}`;
+
+        const avgActiveSps =
+          STATE.activeSpeakingMs > 1000
+            ? (STATE.totalSyllables / (STATE.activeSpeakingMs / 1000))
+            : 0;
+        els.avgActiveSpsReadout.textContent = avgActiveSps.toFixed(1);
+
+        els.rmsValueText.textContent = STATE.smoothedRms.toFixed(3);
+        els.noiseFloorText.textContent = STATE.noiseFloor.toFixed(3);
+
+        // Determine Zone Status & Visual Alert Styling
+        let zoneLabel = 'PAUSE / IDLE';
+        let zoneClass = 'bg-slate-800 text-slate-300 border-slate-700';
+        let hubColor = '#64748b';
+        let isOverspeed = false;
+
+        if (sps >= 0.4 && sps < 2.8) {
+          zoneLabel = 'SLOW / MEASURED';
+          zoneClass = 'bg-slate-800 text-sky-300 border-sky-500/40';
+          hubColor = '#38bdf8';
+        } else if (sps >= 2.8 && sps <= 4.2) {
+          zoneLabel = 'DELIBERATE / AUTHORITATIVE';
+          zoneClass = 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50';
+          hubColor = '#10b981';
+        } else if (sps > 4.2 && sps <= 5.2) {
+          zoneLabel = 'CONVERSATIONAL PACE';
+          zoneClass = 'bg-cyan-950/90 text-cyan-300 border-cyan-500/50';
+          hubColor = '#06b6d4';
+        } else if (sps > 5.2 && sps <= 6.2) {
+          zoneLabel = 'FAST / RUSH WARNING';
+          zoneClass = 'bg-amber-950/90 text-amber-300 border-amber-500/60';
+          hubColor = '#f59e0b';
+        } else if (sps > 6.2) {
+          zoneLabel = 'DANGER: SLURRING / CLUTTERING';
+          zoneClass = 'bg-red-950 text-red-200 border-red-500 animate-pulse';
+          hubColor = '#ef4444';
+        }
+
+        // Check against user's selected Target Ceiling
+        if (sps > CONFIG.targetMaxSps + 0.35 && sps > 4.5) {
+          isOverspeed = true;
+        }
+
+        els.zoneBadge.textContent = zoneLabel;
+        els.zoneBadge.className = `px-2.5 py-0.5 rounded-full text-xs font-mono-tech font-semibold border ${zoneClass}`;
+        els.hubCenterDot.setAttribute('fill', hubColor);
+
+        if (isOverspeed && CONFIG.visualAlert) {
+          els.tachometerCard.classList.add('hud-overspeed-alert');
+        } else {
+          els.tachometerCard.classList.remove('hud-overspeed-alert');
+        }
+
+        if (sps > 5.5) {
+          playOverspeedBeep(nowMs);
+        }
+
+        renderOscilloscope();
+      }
+
+      function renderOscilloscope() {
+        const canvas = els.envelopeCanvas;
+        const rect = canvas.parentElement.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const targetW = Math.floor(rect.width * dpr);
+        const targetH = Math.floor(rect.height * dpr);
+
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+
+        const w = canvas.width;
+        const h = canvas.height;
+        canvasCtx.clearRect(0, 0, w, h);
+
+        const maxRmsScale = 0.16; // Vertical full scale for RMS
+        const history = STATE.scopeHistory;
+        if (history.length < 2) return;
+
+        // 1. Draw Threshold Line (Amber Dashed)
+        const threshY = h - Math.min(1, CONFIG.threshold / maxRmsScale) * (h * 0.86) - 6;
+        canvasCtx.save();
+        canvasCtx.beginPath();
+        canvasCtx.setLineDash([6 * dpr, 4 * dpr]);
+        canvasCtx.strokeStyle = 'rgba(251, 191, 36, 0.75)';
+        canvasCtx.lineWidth = 1.5 * dpr;
+        canvasCtx.moveTo(0, threshY);
+        canvasCtx.lineTo(w, threshY);
+        canvasCtx.stroke();
+        canvasCtx.restore();
+
+        // 2. Draw Vocal Sonority Envelope Area & Stroke
+        const stepX = w / (STATE.maxScopePoints - 1);
+        canvasCtx.beginPath();
+        for (let i = 0; i < history.length; i++) {
+          const x = i * stepX;
+          const norm = Math.min(1, history[i].rms / maxRmsScale);
+          const y = h - norm * (h * 0.86) - 6;
+          if (i === 0) canvasCtx.moveTo(x, y);
+          else canvasCtx.lineTo(x, y);
+        }
+
+        canvasCtx.strokeStyle = '#22d3ee';
+        canvasCtx.lineWidth = 2 * dpr;
+        canvasCtx.stroke();
+
+        // Subtle gradient fill under envelope
+        canvasCtx.lineTo((history.length - 1) * stepX, h);
+        canvasCtx.lineTo(0, h);
+        canvasCtx.closePath();
+        const grad = canvasCtx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, 'rgba(34, 211, 238, 0.28)');
+        grad.addColorStop(1, 'rgba(34, 211, 238, 0.01)');
+        canvasCtx.fillStyle = grad;
+        canvasCtx.fill();
+
+        // 3. Draw Detected Syllable Nucleus Peak Dots
+        for (let i = 0; i < history.length; i++) {
+          if (history[i].isPeak) {
+            const x = i * stepX;
+            const norm = Math.min(1, history[i].rms / maxRmsScale);
+            const y = h - norm * (h * 0.86) - 6;
+
+            // Vertical stem
+            canvasCtx.beginPath();
+            canvasCtx.strokeStyle = 'rgba(52, 211, 153, 0.35)';
+            canvasCtx.lineWidth = 1 * dpr;
+            canvasCtx.moveTo(x, y);
+            canvasCtx.lineTo(x, h);
+            canvasCtx.stroke();
+
+            // Glowing Emerald Nucleus Marker
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, 4.5 * dpr, 0, Math.PI * 2);
+            canvasCtx.fillStyle = '#34d399';
+            canvasCtx.fill();
+            canvasCtx.lineWidth = 1.5 * dpr;
+            canvasCtx.strokeStyle = '#064e3b';
+            canvasCtx.stroke();
+          }
+        }
+      }
+
+      // --- MAIN ANIMATION LOOP ---
+      function animateLoop(nowMs) {
+        const dtMs = Math.min(100, nowMs - STATE.lastFrameTimeMs);
+        STATE.lastFrameTimeMs = nowMs;
+
+        processAudioAndDetectPeaks(nowMs);
+        updateSpeedometerPhysics(nowMs, dtMs);
+        renderHud(nowMs);
+
+        requestAnimationFrame(animateLoop);
+      }
+
+      // --- UI EVENT LISTENERS & CALIBRATION CONTROLS ---
+      function setSimMode(mode) {
+        STATE.simMode = mode;
+        STATE.nextSimSyllableMs = performance.now() + 80;
+        els.simBtns.forEach(btn => {
+          if (btn.dataset.sim === mode) {
+            btn.className = 'sim-btn px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950 transition';
+          } else {
+            btn.className = 'sim-btn px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white transition';
+          }
+        });
+
+        if (mode !== 'off') {
+          if (STATE.isMicActive) stopMicrophone();
+          els.peakStatusText.textContent = 'SIMULATING';
+          els.peakStatusText.className = 'text-xs font-mono-tech text-cyan-400 font-semibold leading-tight mt-0.5';
+        } else if (!STATE.isMicActive) {
+          els.peakStatusText.textContent = 'STANDBY';
+          els.peakStatusText.className = 'text-xs font-mono-tech text-slate-300 font-semibold leading-tight mt-0.5';
+        }
+      }
+
+      function resetSessionStats() {
+        STATE.syllableTimestamps = [];
+        STATE.totalSyllables = 0;
+        STATE.activeSpeakingMs = 0;
+        STATE.displayedSps = 0;
+        STATE.instantBurstSps = 0;
+        STATE.peakHoldSps = 0;
+        STATE.scopeHistory = [];
+      }
+
+      function bindEvents() {
+        els.micToggleBtn.addEventListener('click', toggleMicrophone);
+        els.resetSessionBtn.addEventListener('click', resetSessionStats);
+        els.dismissErrorBtn.addEventListener('click', () => els.errorBanner.classList.add('hidden'));
+
+        // Simulator Mode Buttons
+        els.simBtns.forEach(btn => {
+          btn.addEventListener('click', () => setSimMode(btn.dataset.sim));
+        });
+
+        // Target Pacing Presets
+        const PRESETS = {
+          public: { min: 3.0, max: 4.2 },
+          drill80: { min: 2.6, max: 3.6 },
+          conv: { min: 4.0, max: 5.0 }
+        };
+
+        els.presetBtns.forEach(btn => {
+          btn.addEventListener('click', () => {
+            const key = btn.dataset.preset;
+            if (PRESETS[key]) {
+              CONFIG.targetMinSps = PRESETS[key].min;
+              CONFIG.targetMaxSps = PRESETS[key].max;
+              updateTargetHighlightArc();
+            }
+            els.presetBtns.forEach(b => {
+              const active = b === btn;
+              b.className = active
+                ? 'preset-btn text-left p-2.5 rounded-xl border transition flex items-center justify-between bg-emerald-950/40 border-emerald-500/60 text-white'
+                : 'preset-btn text-left p-2.5 rounded-xl border transition flex items-center justify-between bg-slate-900/70 border-slate-800 text-slate-300 hover:border-slate-700';
+            });
+          });
+        });
+
+        // DSP Sliders
+        els.thresholdSlider.addEventListener('input', e => {
+          CONFIG.threshold = parseFloat(e.target.value);
+          els.thresholdVal.textContent = CONFIG.threshold.toFixed(3);
+        });
+
+        els.refractorySlider.addEventListener('input', e => {
+          CONFIG.refractoryMs = parseInt(e.target.value, 10);
+          els.refractoryVal.textContent = `${CONFIG.refractoryMs} ms`;
+        });
+
+        els.windowSlider.addEventListener('input', e => {
+          CONFIG.rollingWindowSec = parseFloat(e.target.value);
+          els.windowVal.textContent = `${CONFIG.rollingWindowSec.toFixed(1)} s`;
+        });
+
+        els.resetDspBtn.addEventListener('click', () => {
+          CONFIG.threshold = 0.032;
+          CONFIG.refractoryMs = 95;
+          CONFIG.rollingWindowSec = 2.4;
+          els.thresholdSlider.value = '0.032';
+          els.thresholdVal.textContent = '0.032';
+          els.refractorySlider.value = '95';
+          els.refractoryVal.textContent = '95 ms';
+          els.windowSlider.value = '2.4';
+          els.windowVal.textContent = '2.4 s';
+        });
+
+        // Behavior Checkboxes
+        els.visualAlertToggle.addEventListener('change', e => {
+          CONFIG.visualAlert = e.target.checked;
+        });
+        els.audioAlertToggle.addEventListener('change', e => {
+          CONFIG.audioAlert = e.target.checked;
+        });
+        els.breathHoldToggle.addEventListener('change', e => {
+          CONFIG.breathStabilizer = e.target.checked;
+        });
+      }
+
+      // --- INITIALIZE ON LOAD ---
+      window.addEventListener('load', () => {
+        buildSpeedometerGeometry();
+        bindEvents();
+        requestAnimationFrame(animateLoop);
+      });
+    })();
+  </script>
+</body>
+</html>
